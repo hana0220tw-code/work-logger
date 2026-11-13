@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>個人工作紀錄與任務管理系統</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome 圖示 CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Firebase SDK (Compat Version 10) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    .sticky-header { position: sticky; top: 0; z-index: 30; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans">
+
+  <!-- ================= 頂部導航與切換 ================= -->
+  <header class="bg-slate-900 text-white px-5 py-3 sticky-header shadow-md flex flex-wrap justify-between items-center gap-3">
+    <div class="flex items-center space-x-2.5">
+      <i class="fa-solid fa-clipboard-check text-indigo-400 text-xl"></i>
+      <h1 class="text-base md:text-lg font-bold tracking-wide">個人工作紀錄與待辦管理系統</h1>
+      <span id="syncStatus" class="ml-2 text-[11px] px-2 py-0.5 rounded bg-amber-900/60 text-amber-200 border border-amber-700/60 flex items-center gap-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+        <span>連線檢查中...</span>
+      </span>
+    </div>
+
+    <!-- 視圖切換與備份按鈕 -->
+    <div class="flex items-center space-x-2 text-xs md:text-sm">
+      <button onclick="switchView('calendar')" id="btn-view-cal" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold transition flex items-center gap-1.5 shadow-sm">
+        <i class="fa-regular fa-calendar-days"></i>
+        <span>月曆工作視圖</span>
+      </button>
+      <button onclick="switchView('list')" id="btn-view-list" class="px-3.5 py-1.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium transition flex items-center gap-1.5">
+        <i class="fa-solid fa-list-check"></i>
+        <span>任務彙整清單</span>
+      </button>
+
+      <div class="h-4 w-px bg-slate-700 mx-1"></div>
+
+      <button onclick="exportData()" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition" title="匯出備份檔">
+        <i class="fa-solid fa-download mr-1"></i>匯出
+      </button>
+      <label class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 cursor-pointer transition" title="匯入備份檔">
+        <i class="fa-solid fa-upload mr-1"></i>匯入
+        <input type="file" id="importFileInput" class="hidden" accept=".json" onchange="importData(event)">
+      </label>
+    </div>
+  </header>
+
+  <!-- ================= 主內容區域 ================= -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 space-y-6">
+
+    <!-- 視圖 1: 月曆工作紀錄 + 未完成集中檢視視窗 -->
+    <div id="view-calendar" class="space-y-4">
+
+      <!-- 控制列：年月跳轉與新增任務 -->
+      <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-wrap justify-between items-center gap-3">
+        <div class="flex items-center space-x-2">
+          <button onclick="changeMonth(-1)" class="px-3 py-1.5 border rounded-lg hover:bg-slate-100 text-slate-600 text-xs font-bold transition">◀</button>
+          <span id="calendar-title" class="text-base font-bold text-slate-800 min-w-[140px] text-center">-- 年 -- 月</span>
+          <button onclick="changeMonth(1)" class="px-3 py-1.5 border rounded-lg hover:bg-slate-100 text-slate-600 text-xs font-bold transition">▶</button>
+          <button onclick="jumpToToday()" class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold border border-indigo-200 transition">回到今天</button>
+        </div>
+
+        <div class="flex items-center space-x-2">
+          <button onclick="openTaskModal(null, getTodayString())" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+            <i class="fa-solid fa-plus"></i>
+            <span>新增今日工作</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 雙欄版面：左側月曆 + 右側未完成常駐視窗 -->
+      <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 items-start">
+
+        <!-- 左側：月曆 (佔 3 欄) -->
+        <div class="lg:col-span-3 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <!-- 星期標題 -->
+          <div class="grid grid-cols-7 text-center font-bold text-xs md:text-sm bg-slate-100/80 border-b border-slate-200 text-slate-600 py-2.5">
+            <div>週一</div>
+            <div>週二</div>
+            <div>週三</div>
+            <div>週四</div>
+            <div>週五</div>
+            <div class="text-red-500">週六</div>
+            <div class="text-red-500">週日</div>
+          </div>
+          <!-- 月曆方格 -->
+          <div id="calendar-grid" class="grid grid-cols-7 border-collapse bg-slate-200 gap-px"></div>
+        </div>
+
+        <!-- 右側：未完成任務集中專屬視窗 (佔 1 欄) -->
+        <div class="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3 sticky top-20">
+          <div class="flex justify-between items-center border-b pb-2.5">
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+              <h2 class="font-bold text-sm text-slate-800">待完成工作集中追蹤</h2>
+            </div>
+            <span id="pending-count-badge" class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">0 項</span>
+          </div>
+
+          <p class="text-[11px] text-slate-500">自動彙整所有尚未打勾完成的任務項目：</p>
+
+          <!-- 待辦卡片清單列表 -->
+          <div id="pending-tasks-list" class="space-y-2 max-h-[600px] overflow-y-auto pr-1"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 視圖 2: 任務總覽條列分頁 (支援多維度排序與篩選) -->
+    <div id="view-list" class="hidden space-y-4">
+      <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 space-y-4">
+
+        <!-- 頂部過濾與排序控制列 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+          <div>
+            <h2 class="text-base font-bold text-slate-800">所有工作紀錄總覽</h2>
+            <p class="text-xs text-slate-500 mt-0.5">條列式呈現所有已登錄工作，支援依照時間、類別與完成狀態排序</p>
+          </div>
+
+          <button onclick="openTaskModal()" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1">
+            <i class="fa-solid fa-plus"></i>
+            <span>新增工作事項</span>
+          </button>
+        </div>
+
+        <!-- 篩選器與排序選單 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+          <!-- 排序欄位 -->
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">排序依據：</label>
+            <select id="sort-by" onchange="renderListView()" class="w-full border rounded-lg p-2 bg-white text-xs">
+              <option value="date-desc">日期：由新到舊 (最新優先)</option>
+              <option value="date-asc">日期：由舊到新</option>
+              <option value="status-pending">狀態：未完成優先置頂</option>
+              <option value="status-completed">狀態：已完成優先</option>
+              <option value="category">工作類別 (A ➔ Z)</option>
+              <option value="owner">負責人 Owner</option>
+            </select>
+          </div>
+
+          <!-- 篩選：狀態 -->
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">狀態篩選：</label>
+            <select id="filter-status" onchange="renderListView()" class="w-full border rounded-lg p-2 bg-white text-xs">
+              <option value="all">全部狀態</option>
+              <option value="pending">僅顯示「未完成 / 進行中」</option>
+              <option value="completed">僅顯示「已完成」</option>
+              <option value="cancelled">僅顯示「已取消」</option>
+            </select>
+          </div>
+
+          <!-- 篩選：類別 -->
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">類別篩選：</label>
+            <select id="filter-category" onchange="renderListView()" class="w-full border rounded-lg p-2 bg-white text-xs">
+              <option value="all">全部類別</option>
+            </select>
+          </div>
+
+          <!-- 關鍵字搜尋 -->
+          <div>
+            <label class="block font-semibold text-slate-600 mb-1">搜尋關鍵字 / Owner：</label>
+            <input type="text" id="filter-search" oninput="renderListView()" placeholder="輸入名稱或負責人..." class="w-full border rounded-lg p-2 text-xs">
+          </div>
+        </div>
+
+        <!-- 條列資料表格 -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs md:text-sm">
+            <thead class="bg-slate-100 text-slate-600 border-y border-slate-200">
+              <tr>
+                <th class="py-3 px-3 w-12 text-center">狀態</th>
+                <th class="py-3 px-3 w-28">執行日期</th>
+                <th class="py-3 px-3">工作事項標題</th>
+                <th class="py-3 px-3 w-28">工作類別</th>
+                <th class="py-3 px-3 w-28">負責人 (Owner)</th>
+                <th class="py-3 px-3 w-20 text-center">附圖</th>
+                <th class="py-3 px-3 w-28 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="list-table-body" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= 彈出視窗：新增 / 編輯工作事項 ================= -->
+  <div id="taskModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-5 space-y-4 border border-slate-100 text-xs">
+
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 id="modal-title" class="font-bold text-sm text-slate-800 flex items-center gap-2">
+          <i class="fa-solid fa-pen-to-square text-indigo-600"></i>
+          <span>編輯工作紀錄</span>
+        </h3>
+        <button onclick="closeTaskModal()" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+      </div>
+
+      <!-- 表單欄位 -->
+      <div class="space-y-3">
+        <!-- 執行日期與狀態 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">工作日期 *</label>
+            <input type="date" id="task-date" class="w-full border rounded-lg p-2 bg-white text-xs">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">進度狀態 *</label>
+            <select id="task-status" class="w-full border rounded-lg p-2 bg-white text-xs">
+              <option value="pending">🟡 進行中 / 未完成</option>
+              <option value="completed">🟢 已完成</option>
+              <option value="cancelled">⚪ 已取消</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 事項名稱 -->
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">工作事項標題 *</label>
+          <input type="text" id="task-title" placeholder="例如：AOI Daily 分析報告發送、KLA 機台檢校" class="w-full border rounded-lg p-2 text-xs">
+        </div>
+
+        <!-- 類別與 Owner -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">工作類別 (可選取、新增或刪除)</label>
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-1.5">
+                <select id="task-category-select" class="w-full border rounded-lg p-2 bg-white text-xs"></select>
+                <button type="button" onclick="deleteSelectedCategory()" class="px-2.5 py-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg text-xs font-semibold border border-rose-200 transition" title="刪除目前選取的類別">
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <input type="text" id="new-category-input" placeholder="自訂新類別名稱..." class="w-full border rounded p-1.5 text-xs bg-slate-50">
+                <button type="button" onclick="addNewCategoryFromModal()" class="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded text-xs font-semibold whitespace-nowrap border border-indigo-200">
+                  + 加入類別
+                </button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">負責人員 (Owner) *</label>
+            <input type="text" id="task-owner" placeholder="例如：Szuhua, Roger..." class="w-full border rounded-lg p-2 text-xs font-medium">
+          </div>
+        </div>
+
+        <!-- 額外補充詳細內容 (富備註) -->
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">額外補充詳細內容 / 執行紀錄</label>
+          <textarea id="task-desc" rows="3" placeholder="詳細步驟、會議決議事項、待追蹤問題等..." class="w-full border rounded-lg p-2 text-xs"></textarea>
+        </div>
+
+        <!-- 圖片上傳 / 貼圖 -->
+        <div class="border border-dashed border-slate-300 rounded-lg p-3 bg-slate-50 space-y-2">
+          <label class="block font-semibold text-slate-700 text-xs flex items-center justify-between">
+            <span>📷 補充貼圖 / 螢幕截圖</span>
+            <span class="text-[10px] text-slate-400 font-normal">可上傳本機圖檔或貼上網路圖片 URL</span>
+          </label>
+
+          <div class="flex items-center gap-2">
+            <input type="file" id="task-image-file" accept="image/*" onchange="handleImageUpload(event)" class="text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            <span class="text-slate-400 text-xs">或</span>
+            <input type="text" id="task-image-url" placeholder="貼上圖片 URL" oninput="previewImageUrl(this.value)" class="w-full border rounded p-1 text-xs">
+          </div>
+
+          <!-- 圖片預覽區域 -->
+          <div id="image-preview-box" class="hidden relative inline-block mt-2">
+            <img id="task-image-preview" src="" alt="預覽圖" class="max-h-36 rounded border border-slate-200 shadow-sm object-cover">
+            <button type="button" onclick="clearAttachedImage()" class="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow hover:bg-rose-600">✕</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 按鈕區 -->
+      <div class="flex justify-between items-center border-t pt-3">
+        <button type="button" id="btn-delete-task" onclick="deleteCurrentTask()" class="hidden px-3 py-1.5 text-rose-600 hover:bg-rose-50 rounded-lg font-medium text-xs">
+          <i class="fa-solid fa-trash-can mr-1"></i>刪除事項
+        </button>
+        <div class="flex space-x-2 ml-auto">
+          <button type="button" onclick="closeTaskModal()" class="px-3.5 py-1.5 border rounded-lg text-slate-600 hover:bg-slate-50">取消</button>
+          <button type="button" onclick="saveTask()" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-sm">儲存工作</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 圖片燈箱視窗 (Lightbox) ================= -->
+  <div id="lightboxModal" class="hidden fixed inset-0 z-60 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 cursor-pointer" onclick="closeLightbox()">
+    <div class="relative max-w-3xl max-h-[90vh]">
+      <img id="lightbox-img" src="" class="max-h-[85vh] max-w-full rounded-lg shadow-2xl object-contain">
+      <div class="text-center text-white text-xs mt-2 opacity-80">點擊任意處關閉放大視窗</div>
+    </div>
+  </div>
+
+  <!-- ================= JavaScript 核心運作邏輯 (整合 Firebase) ================= -->
+  <script>
+    // 1. Firebase 專案真實金鑰配置
+    const firebaseConfig = {
+      apiKey: "AIzaSyAzZsltuRMKX45zgts_rv4sPlZho4N_ps4",
+      authDomain: "pie1-4-duty-roster.firebaseapp.com",
+      databaseURL: "https://pie1-4-duty-roster-default-rtdb.firebaseio.com",
+      projectId: "pie1-4-duty-roster",
+      storageBucket: "pie1-4-duty-roster.firebasestorage.app",
+      messagingSenderId: "67862212398",
+      appId: "1:67862212398:web:8d4deb9384c144e5d454bf",
+      measurementId: "G-GP2ZPC8P9F"
+    };
+
+    let db = null;
+    let isFirebaseConnected = false;
+
+    const INITIAL_CATEGORIES = ['日常分析', '專案開發', '機台維護', '跨部門會議', '異常處理'];
+
+    const INITIAL_TASKS = [
+      {
+        id: 'task-1',
+        date: getTodayString(),
+        title: '每日 AOI 缺陷分析彙報',
+        category: '日常分析',
+        owner: 'Szuhua',
+        status: 'completed',
+        desc: '產線 defect rate 保持在 0.03%，已產出報表並發送至相關信箱。',
+        image: ''
+      },
+      {
+        id: 'task-2',
+        date: getTodayString(),
+        title: 'KLA 機台點檢與 Calibration',
+        category: '機台維護',
+        owner: 'Henry',
+        status: 'pending',
+        desc: '等待機台空檔中，預計下午 15:00 進行光學靈敏度校正。',
+        image: ''
+      },
+      {
+        id: 'task-3',
+        date: getDateOffsetDays(-1),
+        title: '跨部門良率檢討會議',
+        category: '跨部門會議',
+        owner: 'Wendy',
+        status: 'pending',
+        desc: '針對上週ロット進行詳細 cross-check，會議記錄待整理補齊。',
+        image: ''
+      }
+    ];
+
+    let tasks = JSON.parse(localStorage.getItem('personal_tasks')) || INITIAL_TASKS;
+    let categories = JSON.parse(localStorage.getItem('personal_categories')) || INITIAL_CATEGORIES;
+    let currentTaskEditingId = null;
+    let currentAttachedImageData = '';
+
+    const today = new Date();
+    let calYear = today.getFullYear();
+    let calMonth = today.getMonth() + 1;
+
+    function initFirebase() {
+      const statusEl = document.getElementById('syncStatus');
+      if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY") {
+        try {
+          firebase.initializeApp(firebaseConfig);
+          db = firebase.database();
+          isFirebaseConnected = true;
+
+          statusEl.className = "ml-2 text-[11px] px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-200 border border-emerald-700/60 flex items-center gap-1";
+          statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span><span>Firebase 雲端即時連動中</span>`;
+
+          // 雲端監聽即時同步
+          db.ref('personalWorkLogger').on('value', (snapshot) => {
+            const data = snapshot.val();
+            if (data) {
+              if (data.tasks) tasks = data.tasks;
+              if (data.categories) categories = data.categories;
+
+              localStorage.setItem('personal_tasks', JSON.stringify(tasks));
+              localStorage.setItem('personal_categories', JSON.stringify(categories));
+
+              renderCalendar();
+              renderPendingWidget();
+              renderListView();
+              populateCategoryDropdown();
+            } else {
+              syncToFirebase();
+            }
+          });
+        } catch (err) {
+          console.error("Firebase 連線失敗:", err);
+          fallbackToLocalStorage("連線異常，使用本地儲存");
+        }
+      } else {
+        fallbackToLocalStorage("本地離線模式");
+      }
+    }
+
+    function fallbackToLocalStorage(msg) {
+      const statusEl = document.getElementById('syncStatus');
+      statusEl.className = "ml-2 text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-1";
+      statusEl.innerHTML = `<span>💻 ${msg}</span>`;
+    }
+
+    function syncToFirebase() {
+      if (isFirebaseConnected && db) {
+        db.ref('personalWorkLogger').set({
+          tasks: tasks,
+          categories: categories,
+          lastUpdated: new Date().toISOString()
+        });
+      }
+    }
+
+    function getTodayString() {
+      const d = new Date();
+      return formatDate(d);
+    }
+
+    function getDateOffsetDays(offset) {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return formatDate(d);
+    }
+
+    function formatDate(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    function saveTasksToStorage() {
+      localStorage.setItem('personal_tasks', JSON.stringify(tasks));
+      localStorage.setItem('personal_categories', JSON.stringify(categories));
+      syncToFirebase();
+      renderCalendar();
+      renderPendingWidget();
+      renderListView();
+      populateCategoryDropdown();
+    }
+
+    function switchView(view) {
+      document.getElementById('view-calendar').classList.toggle('hidden', view !== 'calendar');
+      document.getElementById('view-list').classList.toggle('hidden', view !== 'list');
+
+      const btnCal = document.getElementById('btn-view-cal');
+      const btnList = document.getElementById('btn-view-list');
+
+      if (view === 'calendar') {
+        btnCal.className = "px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold transition flex items-center gap-1.5 shadow-sm";
+        btnList.className = "px-3.5 py-1.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium transition flex items-center gap-1.5";
+        renderCalendar();
+        renderPendingWidget();
+      } else {
+        btnList.className = "px-3.5 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold transition flex items-center gap-1.5 shadow-sm";
+        btnCal.className = "px-3.5 py-1.5 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white font-medium transition flex items-center gap-1.5";
+        renderListView();
+      }
+    }
+
+    function renderCalendar() {
+      document.getElementById('calendar-title').innerText = `${calYear} 年 ${calMonth} 月`;
+      const grid = document.getElementById('calendar-grid');
+      grid.innerHTML = '';
+
+      const firstDay = new Date(calYear, calMonth - 1, 1);
+      const daysInMonth = new Date(calYear, calMonth, 0).getDate();
+      const startDayOffset = (firstDay.getDay() + 6) % 7;
+
+      for (let i = 0; i < startDayOffset; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'min-h-[120px] bg-slate-50/60 p-1.5 border-b border-slate-200';
+        grid.appendChild(empty);
+      }
+
+      const todayStr = getTodayString();
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const curDate = new Date(calYear, calMonth - 1, d);
+        const dateKey = formatDate(curDate);
+        const dayTasks = tasks.filter(t => t.date === dateKey);
+
+        const isToday = dateKey === todayStr;
+        const cell = document.createElement('div');
+        cell.className = `min-h-[120px] p-2 flex flex-col justify-between border-b border-slate-200 transition bg-white hover:bg-indigo-50/20 group relative`;
+
+        let headerHtml = `
+          <div class="flex justify-between items-center mb-1">
+            <span class="text-xs font-bold ${isToday ? 'w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center -ml-1' : 'text-slate-700'}">${d}</span>
+            <button onclick="openTaskModal(null, '${dateKey}')" class="opacity-0 group-hover:opacity-100 text-[11px] w-5 h-5 rounded hover:bg-indigo-100 text-indigo-600 flex items-center justify-center transition" title="在此日新增工作">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+          </div>
+        `;
+
+        let tasksHtml = `<div class="space-y-1 overflow-y-auto max-h-[90px] pr-0.5">`;
+        dayTasks.forEach(task => {
+          let statusBadge = '';
+          let textStyle = '';
+          if (task.status === 'completed') {
+            statusBadge = '<span class="text-emerald-500">●</span>';
+            textStyle = 'text-slate-400 line-through';
+          } else if (task.status === 'cancelled') {
+            statusBadge = '<span class="text-slate-400">✕</span>';
+            textStyle = 'text-slate-400 line-through';
+          } else {
+            statusBadge = '<span class="text-amber-500">●</span>';
+            textStyle = 'text-slate-800 font-medium';
+          }
+
+          tasksHtml += `
+            <div onclick="openTaskModal('${task.id}')" class="cursor-pointer p-1 rounded bg-slate-50 hover:bg-indigo-50 border border-slate-200/80 text-[11px] flex items-center justify-between gap-1 shadow-2xs transition">
+              <span class="truncate flex items-center gap-1 ${textStyle}">
+                ${statusBadge}
+                <span>${task.title}</span>
+              </span>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                ${task.image ? '<i class="fa-solid fa-image text-[9px] text-indigo-500"></i>' : ''}
+                <span class="text-[9px] px-1 rounded bg-slate-200 text-slate-600 font-semibold">${task.owner || '—'}</span>
+              </div>
+            </div>
+          `;
+        });
+        tasksHtml += `</div>`;
+
+        cell.innerHTML = headerHtml + tasksHtml;
+        grid.appendChild(cell);
+      }
+    }
+
+    function changeMonth(delta) {
+      calMonth += delta;
+      if (calMonth > 12) { calMonth = 1; calYear++; }
+      else if (calMonth < 1) { calMonth = 12; calYear--; }
+      renderCalendar();
+    }
+
+    function jumpToToday() {
+      const now = new Date();
+      calYear = now.getFullYear();
+      calMonth = now.getMonth() + 1;
+      renderCalendar();
+    }
+
+    function renderPendingWidget() {
+      const listContainer = document.getElementById('pending-tasks-list');
+      const badge = document.getElementById('pending-count-badge');
+
+      const pendingTasks = tasks.filter(t => t.status === 'pending')
+                                .sort((a, b) => a.date.localeCompare(b.date));
+
+      badge.innerText = `${pendingTasks.length} 項`;
+
+      if (pendingTasks.length === 0) {
+        listContainer.innerHTML = `
+          <div class="text-center py-8 text-slate-400">
+            <i class="fa-regular fa-circle-check text-2xl text-emerald-400 mb-1"></i>
+            <p class="text-xs">太棒了！目前沒有未完成的工作！</p>
+          </div>
+        `;
+        return;
+      }
+
+      listContainer.innerHTML = '';
+      const todayStr = getTodayString();
+
+      pendingTasks.forEach(task => {
+        const isOverdue = task.date < todayStr;
+        const card = document.createElement('div');
+        card.className = `p-2.5 rounded-lg border text-xs space-y-1.5 transition cursor-pointer hover:shadow-sm ${isOverdue ? 'bg-rose-50/60 border-rose-200' : 'bg-slate-50 border-slate-200'}`;
+        card.onclick = () => openTaskModal(task.id);
+
+        card.innerHTML = `
+          <div class="flex justify-between items-start gap-1">
+            <span class="font-bold text-slate-800 line-clamp-1">${task.title}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ${isOverdue ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800'}">
+              ${isOverdue ? '⚠️ 逾期' : '進行中'}
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between text-[11px] text-slate-500">
+            <span>📅 ${task.date}</span>
+            <span class="bg-white px-1.5 py-0.5 rounded border border-slate-200 font-medium text-slate-700">👤 ${task.owner || '未指派'}</span>
+          </div>
+
+          ${task.desc ? `<p class="text-[10px] text-slate-500 line-clamp-2 bg-white/70 p-1 rounded">${task.desc}</p>` : ''}
+
+          <div class="flex items-center justify-between pt-1 border-t border-slate-200/60">
+            <span class="text-[10px] text-indigo-600 font-medium">${task.category || '一般事項'}</span>
+            <button onclick="event.stopPropagation(); quickMarkDone('${task.id}')" class="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-semibold flex items-center gap-1 shadow-2xs">
+              <i class="fa-solid fa-check"></i>完成
+            </button>
+          </div>
+        `;
+        listContainer.appendChild(card);
+      });
+    }
+
+    function quickMarkDone(taskId) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        task.status = 'completed';
+        saveTasksToStorage();
+      }
+    }
+
+    function renderListView() {
+      const tbody = document.getElementById('list-table-body');
+      const sortBy = document.getElementById('sort-by').value;
+      const filterStatus = document.getElementById('filter-status').value;
+      const filterCategory = document.getElementById('filter-category').value;
+      const filterSearch = document.getElementById('filter-search').value.trim().toLowerCase();
+
+      let filtered = [...tasks];
+
+      if (filterStatus !== 'all') {
+        filtered = filtered.filter(t => t.status === filterStatus);
+      }
+
+      if (filterCategory !== 'all') {
+        filtered = filtered.filter(t => t.category === filterCategory);
+      }
+
+      if (filterSearch) {
+        filtered = filtered.filter(t => 
+          (t.title && t.title.toLowerCase().includes(filterSearch)) ||
+          (t.owner && t.owner.toLowerCase().includes(filterSearch)) ||
+          (t.desc && t.desc.toLowerCase().includes(filterSearch))
+        );
+      }
+
+      filtered.sort((a, b) => {
+        if (sortBy === 'date-desc') return b.date.localeCompare(a.date);
+        if (sortBy === 'date-asc') return a.date.localeCompare(b.date);
+        if (sortBy === 'status-pending') {
+          const rank = { pending: 1, completed: 2, cancelled: 3 };
+          return (rank[a.status] || 9) - (rank[b.status] || 9) || b.date.localeCompare(a.date);
+        }
+        if (sortBy === 'status-completed') {
+          const rank = { completed: 1, pending: 2, cancelled: 3 };
+          return (rank[a.status] || 9) - (rank[b.status] || 9) || b.date.localeCompare(a.date);
+        }
+        if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '') || b.date.localeCompare(a.date);
+        if (sortBy === 'owner') return (a.owner || '').localeCompare(b.owner || '') || b.date.localeCompare(a.date);
+        return 0;
+      });
+
+      tbody.innerHTML = '';
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">查無相符的工作紀錄</td></tr>`;
+        return;
+      }
+
+      filtered.forEach(task => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50 transition';
+
+        let statusBadge = '';
+        if (task.status === 'completed') {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">已完成</span>';
+        } else if (task.status === 'cancelled') {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">已取消</span>';
+        } else {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">未完成</span>';
+        }
+
+        tr.innerHTML = `
+          <td class="py-2.5 px-3 text-center whitespace-nowrap">${statusBadge}</td>
+          <td class="py-2.5 px-3 font-medium text-slate-600 whitespace-nowrap">${task.date}</td>
+          <td class="py-2.5 px-3">
+            <div class="font-bold text-slate-800">${task.title}</div>
+            ${task.desc ? `<div class="text-[11px] text-slate-500 mt-0.5 line-clamp-1">${task.desc}</div>` : ''}
+          </td>
+          <td class="py-2.5 px-3 whitespace-nowrap">
+            <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-medium">${task.category || '—'}</span>
+          </td>
+          <td class="py-2.5 px-3 font-semibold text-slate-700 whitespace-nowrap">${task.owner || '—'}</td>
+          <td class="py-2.5 px-3 text-center whitespace-nowrap">
+            ${task.image ? `<button onclick="openLightbox('${task.image}')" class="text-indigo-600 hover:text-indigo-800 text-sm" title="點擊檢視大圖"><i class="fa-solid fa-image"></i></button>` : '<span class="text-slate-300">—</span>'}
+          </td>
+          <td class="py-2.5 px-3 text-right whitespace-nowrap space-x-2">
+            <button onclick="openTaskModal('${task.id}')" class="text-indigo-600 hover:text-indigo-800 font-semibold text-xs">編輯</button>
+            <button onclick="deleteTaskDirect('${task.id}')" class="text-rose-500 hover:text-rose-700 font-medium text-xs">刪除</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function populateCategoryDropdown() {
+      const selectFilter = document.getElementById('filter-category');
+      const curFilter = selectFilter.value;
+      selectFilter.innerHTML = '<option value="all">全部類別</option>';
+      categories.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.innerText = c;
+        if (c === curFilter) opt.selected = true;
+        selectFilter.appendChild(opt);
+      });
+
+      const modalCatSelect = document.getElementById('task-category-select');
+      const curModalCat = modalCatSelect.value;
+      modalCatSelect.innerHTML = '';
+      categories.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.innerText = c;
+        if (c === curModalCat) opt.selected = true;
+        modalCatSelect.appendChild(opt);
+      });
+    }
+
+    function addNewCategoryFromModal() {
+      const input = document.getElementById('new-category-input');
+      const newCat = input.value.trim();
+      if (!newCat) { alert('請輸入欲新增的類別名稱！'); return; }
+      if (!categories.includes(newCat)) {
+        categories.push(newCat);
+        saveTasksToStorage();
+      }
+      document.getElementById('task-category-select').value = newCat;
+      input.value = '';
+    }
+
+    function deleteSelectedCategory() {
+      const select = document.getElementById('task-category-select');
+      const selectedCat = select.value;
+      if (!selectedCat) { alert('目前沒有選取的類別可刪除！'); return; }
+      if (categories.length <= 1) { alert('至少需保留一個工作類別！'); return; }
+
+      if (confirm(`確定要刪除「${selectedCat}」這個工作類別嗎？`)) {
+        categories = categories.filter(c => c !== selectedCat);
+        saveTasksToStorage();
+      }
+    }
+
+    function openTaskModal(taskId = null, defaultDate = null) {
+      currentTaskEditingId = taskId;
+      const modal = document.getElementById('taskModal');
+      const btnDel = document.getElementById('btn-delete-task');
+      populateCategoryDropdown();
+
+      if (taskId) {
+        const task = tasks.find(t => t.id === taskId);
+        if (!task) return;
+        document.getElementById('modal-title').innerHTML = '<i class="fa-solid fa-pen-to-square text-indigo-600"></i><span>編輯工作紀錄</span>';
+        document.getElementById('task-date').value = task.date;
+        document.getElementById('task-status').value = task.status;
+        document.getElementById('task-title').value = task.title;
+
+        if (task.category && !categories.includes(task.category)) {
+          categories.push(task.category);
+          saveTasksToStorage();
+        }
+        document.getElementById('task-category-select').value = task.category || (categories[0] || '日常分析');
+        document.getElementById('task-owner').value = task.owner || 'Szuhua';
+        document.getElementById('task-desc').value = task.desc || '';
+        currentAttachedImageData = task.image || '';
+        btnDel.classList.remove('hidden');
+      } else {
+        document.getElementById('modal-title').innerHTML = '<i class="fa-solid fa-plus text-indigo-600"></i><span>新增工作紀錄</span>';
+        document.getElementById('task-date').value = defaultDate || getTodayString();
+        document.getElementById('task-status').value = 'pending';
+        document.getElementById('task-title').value = '';
+        document.getElementById('task-category-select').value = categories[0] || '日常分析';
+        document.getElementById('task-owner').value = 'Szuhua';
+        document.getElementById('task-desc').value = '';
+        currentAttachedImageData = '';
+        btnDel.classList.add('hidden');
+      }
+
+      document.getElementById('new-category-input').value = '';
+      document.getElementById('task-image-file').value = '';
+      document.getElementById('task-image-url').value = currentAttachedImageData.startsWith('http') ? currentAttachedImageData : '';
+      updateImagePreviewBox();
+
+      modal.classList.remove('hidden');
+    }
+
+    function closeTaskModal() {
+      document.getElementById('taskModal').classList.add('hidden');
+      currentTaskEditingId = null;
+      currentAttachedImageData = '';
+    }
+
+    function handleImageUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        currentAttachedImageData = event.target.result;
+        updateImagePreviewBox();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function previewImageUrl(url) {
+      if (url && url.trim()) {
+        currentAttachedImageData = url.trim();
+        updateImagePreviewBox();
+      }
+    }
+
+    function updateImagePreviewBox() {
+      const box = document.getElementById('image-preview-box');
+      const img = document.getElementById('task-image-preview');
+      if (currentAttachedImageData) {
+        img.src = currentAttachedImageData;
+        box.classList.remove('hidden');
+      } else {
+        img.src = '';
+        box.classList.add('hidden');
+      }
+    }
+
+    function clearAttachedImage() {
+      currentAttachedImageData = '';
+      document.getElementById('task-image-file').value = '';
+      document.getElementById('task-image-url').value = '';
+      updateImagePreviewBox();
+    }
+
+    function saveTask() {
+      const date = document.getElementById('task-date').value;
+      const status = document.getElementById('task-status').value;
+      const title = document.getElementById('task-title').value.trim();
+      const category = document.getElementById('task-category-select').value;
+      const owner = document.getElementById('task-owner').value.trim() || 'Szuhua';
+      const desc = document.getElementById('task-desc').value.trim();
+
+      if (!date) { alert('請填寫工作日期！'); return; }
+      if (!title) { alert('請填寫工作事項標題！'); return; }
+
+      if (currentTaskEditingId) {
+        const task = tasks.find(t => t.id === currentTaskEditingId);
+        task.date = date;
+        task.status = status;
+        task.title = title;
+        task.category = category;
+        task.owner = owner;
+        task.desc = desc;
+        task.image = currentAttachedImageData;
+      } else {
+        const newTask = {
+          id: 'task_' + Date.now(),
+          date: date,
+          status: status,
+          title: title,
+          category: category,
+          owner: owner,
+          desc: desc,
+          image: currentAttachedImageData
+        };
+        tasks.push(newTask);
+      }
+
+      saveTasksToStorage();
+      closeTaskModal();
+    }
+
+    function deleteCurrentTask() {
+      if (currentTaskEditingId && confirm('確定要刪除這筆工作紀錄嗎？')) {
+        tasks = tasks.filter(t => t.id !== currentTaskEditingId);
+        saveTasksToStorage();
+        closeTaskModal();
+      }
+    }
+
+    function deleteTaskDirect(taskId) {
+      if (confirm('確定要刪除此工作事項嗎？')) {
+        tasks = tasks.filter(t => t.id !== taskId);
+        saveTasksToStorage();
+      }
+    }
+
+    function openLightbox(src) {
+      document.getElementById('lightbox-img').src = src;
+      document.getElementById('lightboxModal').classList.remove('hidden');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightboxModal').classList.add('hidden');
+    }
+
+    function exportData() {
+      const data = {
+        tasks: tasks,
+        categories: categories,
+        exportedAt: new Date().toISOString()
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `work_logger_backup_${getTodayString()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function importData(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const imported = JSON.parse(event.target.result);
+          if (imported.tasks && Array.isArray(imported.tasks)) {
+            tasks = imported.tasks;
+            if (imported.categories && Array.isArray(imported.categories)) {
+              categories = imported.categories;
+            }
+            saveTasksToStorage();
+            alert('工作紀錄備份已成功匯入！');
+          } else {
+            alert('檔案格式錯誤，未找到 tasks 陣列！');
+          }
+        } catch (err) {
+          alert('匯入失敗：非合法 JSON 檔案！');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    window.onload = () => {
+      initFirebase();
+      populateCategoryDropdown();
+      renderCalendar();
+      renderPendingWidget();
+      renderListView();
+    };
+  </script>
+</body>
+</html>
